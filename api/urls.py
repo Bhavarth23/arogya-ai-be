@@ -6,6 +6,7 @@ from .views import (
     MedicalReportUploadView,
     ChatView,
     GeneralChatView,
+    NearbyDoctorsView,
     PasswordResetRequestView,
     PasswordResetConfirmView,
     VerifyOTPView,
@@ -24,6 +25,9 @@ urlpatterns = [
     # FIX: Changed path to 'chat/query/' to match the frontend URL structure (API_URL + /api/chat/query)
     # It seems your frontend uses /api/chat/query. We need to match that.
     path('chat/query/', GeneralChatView.as_view(), name='general-chat-query'), 
+
+    # Nearby Doctors
+    path('doctors/nearby/', NearbyDoctorsView.as_view(), name='nearby-doctors'),
     
     # Authentication
     path('register/', RegisterView.as_view(), name='register'),

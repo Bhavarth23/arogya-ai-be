@@ -2,6 +2,9 @@ import os
 import traceback
 import json
 import random
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
+from urllib.error import URLError, HTTPError
 from django.core.cache import cache
 from django.core.mail import send_mail
 from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
@@ -213,6 +216,142 @@ class MedicalReportDeleteView(generics.DestroyAPIView):
 
     def get_queryset(self):
         return MedicalReport.objects.filter(user=self.request.user)
+
+
+def _fetch_json(url, params=None, data=None, headers=None, timeout=12):
+    if params:
+        url = f"{url}?{urlencode(params)}"
+    request_headers = headers or {}
+    req = Request(url, data=data, headers=request_headers)
+    with urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _build_address(tags):
+    parts = []
+    if tags.get("addr:housenumber"):
+        parts.append(tags["addr:housenumber"])
+    if tags.get("addr:street"):
+        parts.append(tags["addr:street"])
+    street_line = " ".join(parts).strip()
+    city = tags.get("addr:city")
+    state = tags.get("addr:state")
+    postcode = tags.get("addr:postcode")
+    address_parts = [p for p in [street_line, city, state, postcode] if p]
+    return ", ".join(address_parts)
+
+
+class NearbyDoctorsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        city = request.query_params.get("city", "").strip()
+        if not city:
+            return Response(
+                {"error": "City is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        nominatim_headers = {
+            "User-Agent": "ArogyaAI/1.0 (contact: support@arogya.ai)",
+            "Accept-Language": "en",
+        }
+        overpass_headers = {
+            "User-Agent": "ArogyaAI/1.0 (contact: support@arogya.ai)",
+        }
+
+        try:
+            geocode = _fetch_json(
+                "https://nominatim.openstreetmap.org/search",
+                params={"q": city, "format": "json", "limit": 1},
+                headers=nominatim_headers,
+                timeout=10,
+            )
+        except (URLError, HTTPError) as err:
+            return Response(
+                {"error": f"Geocoding failed: {str(err)}"},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        if not geocode:
+            return Response({"city": city, "doctors": []}, status=status.HTTP_200_OK)
+
+        lat = geocode[0].get("lat")
+        lon = geocode[0].get("lon")
+        if not lat or not lon:
+            return Response({"city": city, "doctors": []}, status=status.HTTP_200_OK)
+
+        radius_m = 4500
+        limit = 10
+        overpass_query = f"""
+        [out:json][timeout:25];
+        (
+          node["amenity"="doctors"](around:{radius_m},{lat},{lon});
+          node["healthcare"="doctor"](around:{radius_m},{lat},{lon});
+          way["amenity"="doctors"](around:{radius_m},{lat},{lon});
+          way["healthcare"="doctor"](around:{radius_m},{lat},{lon});
+          relation["amenity"="doctors"](around:{radius_m},{lat},{lon});
+          relation["healthcare"="doctor"](around:{radius_m},{lat},{lon});
+        );
+        out center {limit};
+        """
+        overpass_data = urlencode({"data": overpass_query}).encode("utf-8")
+
+        overpass_endpoints = [
+            "https://overpass-api.de/api/interpreter",
+            "https://overpass.kumi.systems/api/interpreter",
+            "https://overpass.nchc.org.tw/api/interpreter",
+            "https://overpass.openstreetmap.fr/api/interpreter",
+        ]
+        overpass_result = None
+        last_error = None
+        for endpoint in overpass_endpoints:
+            try:
+                overpass_result = _fetch_json(
+                    endpoint,
+                    data=overpass_data,
+                    headers=overpass_headers,
+                    timeout=16,
+                )
+                if overpass_result and overpass_result.get("elements"):
+                    break
+            except (URLError, HTTPError) as err:
+                last_error = err
+                continue
+
+        if overpass_result is None:
+            return Response(
+                {"error": f"Nearby doctor search failed: {str(last_error)}"},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        doctors = []
+        seen = set()
+        for element in overpass_result.get("elements", []):
+            tags = element.get("tags", {})
+            name = tags.get("name") or tags.get("operator") or "Doctor"
+            address = _build_address(tags)
+            el_lat = element.get("lat") or element.get("center", {}).get("lat")
+            el_lon = element.get("lon") or element.get("center", {}).get("lon")
+            key = f"{name}|{address}|{el_lat}|{el_lon}"
+            if key in seen:
+                continue
+            seen.add(key)
+            doctors.append(
+                {
+                    "name": name,
+                    "address": address,
+                    "lat": el_lat,
+                    "lon": el_lon,
+                }
+            )
+            if len(doctors) >= 5:
+                break
+
+        return Response(
+            {"city": city, "doctors": doctors},
+            status=status.HTTP_200_OK,
+        )
 
 
 class ChatView(APIView):
