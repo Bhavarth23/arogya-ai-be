@@ -240,118 +240,185 @@ def _build_address(tags):
     address_parts = [p for p in [street_line, city, state, postcode] if p]
     return ", ".join(address_parts)
 
+def _demo_doctors(city, lat=None, lon=None):
+    base_city = city.strip().title() if city.strip() else "City"
+    templates = [
+        "Care Clinic",
+        "Family Health Center",
+        "City Hospital",
+        "Wellness Clinic",
+        "Community Medical",
+    ]
+    doctors = []
+    for label in templates:
+        doctors.append(
+            {
+                "name": f"{base_city} {label}",
+                "address": f"{base_city} Central Area",
+                "lat": lat,
+                "lon": lon,
+                "is_demo": True,
+            }
+        )
+    return doctors
+
 
 class NearbyDoctorsView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        city = request.query_params.get("city", "").strip()
-        if not city:
-            return Response(
-                {"error": "City is required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        nominatim_headers = {
-            "User-Agent": "ArogyaAI/1.0 (contact: support@arogya.ai)",
-            "Accept-Language": "en",
-        }
-        overpass_headers = {
-            "User-Agent": "ArogyaAI/1.0 (contact: support@arogya.ai)",
-        }
-
         try:
-            geocode = _fetch_json(
-                "https://nominatim.openstreetmap.org/search",
-                params={"q": city, "format": "json", "limit": 1},
-                headers=nominatim_headers,
-                timeout=10,
-            )
-        except (URLError, HTTPError) as err:
-            return Response(
-                {"error": f"Geocoding failed: {str(err)}"},
-                status=status.HTTP_502_BAD_GATEWAY,
-            )
-
-        if not geocode:
-            return Response({"city": city, "doctors": []}, status=status.HTTP_200_OK)
-
-        lat = geocode[0].get("lat")
-        lon = geocode[0].get("lon")
-        if not lat or not lon:
-            return Response({"city": city, "doctors": []}, status=status.HTTP_200_OK)
-
-        radius_m = 4500
-        limit = 10
-        overpass_query = f"""
-        [out:json][timeout:25];
-        (
-          node["amenity"="doctors"](around:{radius_m},{lat},{lon});
-          node["healthcare"="doctor"](around:{radius_m},{lat},{lon});
-          way["amenity"="doctors"](around:{radius_m},{lat},{lon});
-          way["healthcare"="doctor"](around:{radius_m},{lat},{lon});
-          relation["amenity"="doctors"](around:{radius_m},{lat},{lon});
-          relation["healthcare"="doctor"](around:{radius_m},{lat},{lon});
-        );
-        out center {limit};
-        """
-        overpass_data = urlencode({"data": overpass_query}).encode("utf-8")
-
-        overpass_endpoints = [
-            "https://overpass-api.de/api/interpreter",
-            "https://overpass.kumi.systems/api/interpreter",
-            "https://overpass.nchc.org.tw/api/interpreter",
-            "https://overpass.openstreetmap.fr/api/interpreter",
-        ]
-        overpass_result = None
-        last_error = None
-        for endpoint in overpass_endpoints:
-            try:
-                overpass_result = _fetch_json(
-                    endpoint,
-                    data=overpass_data,
-                    headers=overpass_headers,
-                    timeout=16,
+            city = request.query_params.get("city", "").strip()
+            if not city:
+                return Response(
+                    {"error": "City is required."},
+                    status=status.HTTP_400_BAD_REQUEST,
                 )
-                if overpass_result and overpass_result.get("elements"):
-                    break
+
+            nominatim_headers = {
+                "User-Agent": "ArogyaAI/1.0 (contact: support@arogya.ai)",
+                "Accept-Language": "en",
+            }
+            overpass_headers = {
+                "User-Agent": "ArogyaAI/1.0 (contact: support@arogya.ai)",
+            }
+
+            try:
+                geocode = _fetch_json(
+                    "https://nominatim.openstreetmap.org/search",
+                    params={"q": city, "format": "json", "limit": 1},
+                    headers=nominatim_headers,
+                    timeout=10,
+                )
             except (URLError, HTTPError) as err:
-                last_error = err
-                continue
+                return Response(
+                    {"error": f"Geocoding failed: {str(err)}"},
+                    status=status.HTTP_502_BAD_GATEWAY,
+                )
 
-        if overpass_result is None:
+            if not geocode:
+                return Response(
+                    {
+                        "city": city,
+                        "doctors": _demo_doctors(city),
+                        "is_demo": True,
+                        "notice": "No map data found for this city. Showing demo results.",
+                    },
+                    status=status.HTTP_200_OK,
+                )
+
+            lat = geocode[0].get("lat")
+            lon = geocode[0].get("lon")
+            if not lat or not lon:
+                return Response(
+                    {
+                        "city": city,
+                        "doctors": _demo_doctors(city),
+                        "is_demo": True,
+                        "notice": "Location lookup failed. Showing demo results.",
+                    },
+                    status=status.HTTP_200_OK,
+                )
+
+            radius_m = 4500
+            limit = 10
+            overpass_query = f"""
+            [out:json][timeout:25];
+            (
+              node["amenity"="doctors"](around:{radius_m},{lat},{lon});
+              node["healthcare"="doctor"](around:{radius_m},{lat},{lon});
+              way["amenity"="doctors"](around:{radius_m},{lat},{lon});
+              way["healthcare"="doctor"](around:{radius_m},{lat},{lon});
+              relation["amenity"="doctors"](around:{radius_m},{lat},{lon});
+              relation["healthcare"="doctor"](around:{radius_m},{lat},{lon});
+            );
+            out center {limit};
+            """
+            overpass_data = urlencode({"data": overpass_query}).encode("utf-8")
+
+            overpass_endpoints = [
+                "https://overpass-api.de/api/interpreter",
+                "https://overpass.kumi.systems/api/interpreter",
+                "https://overpass.nchc.org.tw/api/interpreter",
+                "https://overpass.openstreetmap.fr/api/interpreter",
+            ]
+            overpass_result = None
+            last_error = None
+            for endpoint in overpass_endpoints:
+                try:
+                    overpass_result = _fetch_json(
+                        endpoint,
+                        data=overpass_data,
+                        headers=overpass_headers,
+                        timeout=16,
+                    )
+                    if overpass_result and overpass_result.get("elements"):
+                        break
+                except (URLError, HTTPError) as err:
+                    last_error = err
+                    continue
+
+            if overpass_result is None:
+                return Response(
+                    {
+                        "city": city,
+                        "doctors": _demo_doctors(city, lat, lon),
+                        "is_demo": True,
+                        "notice": "Nearby search failed. Showing demo results.",
+                    },
+                    status=status.HTTP_200_OK,
+                )
+
+            doctors = []
+            seen = set()
+            for element in overpass_result.get("elements", []):
+                tags = element.get("tags", {})
+                name = tags.get("name") or tags.get("operator") or "Doctor"
+                address = _build_address(tags)
+                el_lat = element.get("lat") or element.get("center", {}).get("lat")
+                el_lon = element.get("lon") or element.get("center", {}).get("lon")
+                key = f"{name}|{address}|{el_lat}|{el_lon}"
+                if key in seen:
+                    continue
+                seen.add(key)
+                doctors.append(
+                    {
+                        "name": name,
+                        "address": address,
+                        "lat": el_lat,
+                        "lon": el_lon,
+                    }
+                )
+                if len(doctors) >= 5:
+                    break
+
+            if not doctors:
+                return Response(
+                    {
+                        "city": city,
+                        "doctors": _demo_doctors(city, lat, lon),
+                        "is_demo": True,
+                        "notice": "No nearby doctors found. Showing demo results.",
+                    },
+                    status=status.HTTP_200_OK,
+                )
+
             return Response(
-                {"error": f"Nearby doctor search failed: {str(last_error)}"},
-                status=status.HTTP_502_BAD_GATEWAY,
+                {"city": city, "doctors": doctors},
+                status=status.HTTP_200_OK,
             )
-
-        doctors = []
-        seen = set()
-        for element in overpass_result.get("elements", []):
-            tags = element.get("tags", {})
-            name = tags.get("name") or tags.get("operator") or "Doctor"
-            address = _build_address(tags)
-            el_lat = element.get("lat") or element.get("center", {}).get("lat")
-            el_lon = element.get("lon") or element.get("center", {}).get("lon")
-            key = f"{name}|{address}|{el_lat}|{el_lon}"
-            if key in seen:
-                continue
-            seen.add(key)
-            doctors.append(
+        except Exception:
+            traceback.print_exc()
+            fallback_city = request.query_params.get("city", "").strip()
+            return Response(
                 {
-                    "name": name,
-                    "address": address,
-                    "lat": el_lat,
-                    "lon": el_lon,
-                }
+                    "city": fallback_city,
+                    "doctors": _demo_doctors(fallback_city),
+                    "is_demo": True,
+                    "notice": "Unexpected error. Showing demo results.",
+                },
+                status=status.HTTP_200_OK,
             )
-            if len(doctors) >= 5:
-                break
-
-        return Response(
-            {"city": city, "doctors": doctors},
-            status=status.HTTP_200_OK,
-        )
 
 
 class ChatView(APIView):
@@ -488,3 +555,70 @@ class PasswordResetConfirmView(APIView):
             return Response({'message': 'Password reset successful.'}, status=status.HTTP_200_OK)
 
         return Response({'error': 'Invalid reset link.'}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class SymptomCorrelationView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        symptoms = (request.data.get("symptoms") or "").strip()
+        report_summary = (request.data.get("report_summary") or "").strip()
+        if not symptoms:
+            return Response({"error": "Symptoms are required."}, status=status.HTTP_400_BAD_REQUEST)
+        if not GOOGLE_API_KEY:
+            return Response({"error": "AI service is not configured."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        try:
+            model = genai.GenerativeModel(GOOGLE_GEMINI_MODEL)
+            prompt = f"""
+You are a health assistant. Given symptoms and an optional report summary, respond in JSON only.
+Do NOT include Markdown.
+
+Required JSON keys:
+- "summary": 2-3 sentences relating symptoms to possible lab trends (non-diagnostic).
+- "possible_connections": list of 3-5 short bullets.
+- "follow_up": list of 2-3 safe next steps.
+- "disclaimer": one sentence that this is informational only.
+
+Symptoms: {symptoms}
+Report Summary: {report_summary if report_summary else "N/A"}
+"""
+            response = model.generate_content(prompt)
+            json_response = response.text.strip().replace("```json", "").replace("```", "")
+            return Response(json.loads(json_response), status=status.HTTP_200_OK)
+        except Exception as e:
+            traceback.print_exc()
+            return Response({"error": f"AI service failed: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class MedicationSafetyView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        medications = (request.data.get("medications") or "").strip()
+        if not medications:
+            return Response({"error": "Medications are required."}, status=status.HTTP_400_BAD_REQUEST)
+        if not GOOGLE_API_KEY:
+            return Response({"error": "AI service is not configured."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        try:
+            model = genai.GenerativeModel(GOOGLE_GEMINI_MODEL)
+            prompt = f"""
+You are a medical safety assistant. Given a list of medications/supplements, respond in JSON only.
+Do NOT include Markdown.
+
+Required JSON keys:
+- "summary": 1-2 sentences on general safety considerations (non-diagnostic).
+- "interactions": list of 2-4 possible interaction notes (if none, say "No known interactions from this input").
+- "warnings": list of 2-3 general cautions (e.g., allergies, dosing, duplication).
+- "next_steps": list of 2 safe actions (e.g., consult pharmacist).
+- "disclaimer": one sentence that this is informational only.
+
+Medications: {medications}
+"""
+            response = model.generate_content(prompt)
+            json_response = response.text.strip().replace("```json", "").replace("```", "")
+            return Response(json.loads(json_response), status=status.HTTP_200_OK)
+        except Exception as e:
+            traceback.print_exc()
+            return Response({"error": f"AI service failed: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

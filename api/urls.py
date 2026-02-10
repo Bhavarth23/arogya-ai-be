@@ -10,7 +10,9 @@ from .views import (
     PasswordResetRequestView,
     PasswordResetConfirmView,
     VerifyOTPView,
-    MedicalReportDeleteView
+    MedicalReportDeleteView,
+    SymptomCorrelationView,
+    MedicationSafetyView,
 )
 
 urlpatterns = [
@@ -28,6 +30,10 @@ urlpatterns = [
 
     # Nearby Doctors
     path('doctors/nearby/', NearbyDoctorsView.as_view(), name='nearby-doctors'),
+
+    # AI Tools
+    path('tools/symptom-correlation/', SymptomCorrelationView.as_view(), name='symptom-correlation'),
+    path('tools/medication-safety/', MedicationSafetyView.as_view(), name='medication-safety'),
     
     # Authentication
     path('register/', RegisterView.as_view(), name='register'),
